@@ -8,7 +8,7 @@
 
 
 #define MAX_STREAMS 16
-//#define AV_FIFO_SINK
+#define AV_FIFO_SINK
 
 static AVFormatContext *fmt_ctx = NULL;
 static AVPacket pkt;
@@ -36,11 +36,11 @@ int init_av_stream(char *base_path, int i, enum AVMediaType t)
 {
     char   full_path[128];
     av_streams[i].type = t;
-    sprintf(full_path, "%s_%d_%02d.es", base_path, t, i);
+    sprintf(full_path, "%s/stream_%s_%02d.es", base_path, av_get_media_type_string(t), i);
 #ifndef AV_FIFO_SINK
-    av_streams[i].fd = open(full_path, O_CREAT|O_WRONLY|O_TRUNC| S_IWUSR | S_IWGRP);
+    av_streams[i].fd = open(full_path, O_CREAT|O_WRONLY|O_TRUNC, S_IRWXU | S_IRWXG);
 #else
-    if(mkfifo(full_path, S_IRUSR | S_IWUSR | S_IWGRP) == -1 && errno != EEXIST)
+    if(mkfifo(full_path, S_IRWXU | S_IRWXG ) == -1 && errno != EEXIST)
     {
         errExit("ERROR: mkfifo %s", full_path);
     }
@@ -60,6 +60,7 @@ int main(int argc, char **argv)
     char *src_filename;
     int i;
     int stream_index;
+    int size;
 
     if(argc < 2)
     {
@@ -105,11 +106,17 @@ int main(int argc, char **argv)
 
     while(av_read_frame(fmt_ctx, &pkt) >= 0) {
         stream_index = pkt.stream_index;
-        if(stream_index == 0)
+        /*if(stream_index == 0)
         {
             static int c = 0;
             printf("Vid frame %d, %d, %ld\n", c++, pkt.size, pkt.pts);
-        }
+        }*/
+#ifdef AV_FIFO_SINK
+        printf("av_to_es: %d, %ld\n", pkt.size + 8, pkt.pts);
+        size = pkt.size + sizeof(pkt.pts);
+        write(av_streams[stream_index].fd, &size, sizeof(pkt.size));
+        write(av_streams[stream_index].fd, &pkt.pts, sizeof(pkt.pts));
+#endif
         write(av_streams[stream_index].fd, pkt.data, pkt.size);
     }
 
