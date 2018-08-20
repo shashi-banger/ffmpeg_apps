@@ -118,6 +118,7 @@ int main(int argc, char **argv)
         write(av_streams[stream_index].fd, &pkt.pts, sizeof(pkt.pts));
 #endif
         write(av_streams[stream_index].fd, pkt.data, pkt.size);
+        av_packet_unref(&pkt);
     }
 
 }
