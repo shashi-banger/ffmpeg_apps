@@ -111,6 +111,13 @@ int main(int argc, char **argv)
             static int c = 0;
             printf("Vid frame %d, %d, %ld\n", c++, pkt.size, pkt.pts);
         }*/
+
+        /*Handle Invalid PTS */
+        if ((pkt.pts < 0) || (pkt.pts > pow(2,33))) {
+            av_packet_unref(&pkt);
+            continue;
+        }
+
 #ifdef AV_FIFO_SINK
         printf("av_to_es: %d, %ld\n", pkt.size + 8, pkt.pts);
         size = pkt.size + sizeof(pkt.pts);
