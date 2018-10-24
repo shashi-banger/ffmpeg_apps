@@ -5,6 +5,8 @@
 #include <string.h>
 #include <libavutil/avutil.h>
 #include <libavformat/avformat.h>
+#include <signal.h>
+#include <unistd.h>
 
 
 #define MAX_STREAMS 16
@@ -12,7 +14,9 @@
 
 static AVFormatContext *fmt_ctx = NULL;
 static AVPacket pkt;
+static int exit_flag = 0;
 
+void signal_handler(int sig);
 static struct {
     enum AVMediaType   type;
     int           fd;
@@ -30,7 +34,6 @@ errExit(const char *format, ...)
 
     exit(1);
 }
-
 
 int init_av_stream(char *base_path, int i, enum AVMediaType t)
 {
@@ -54,6 +57,23 @@ int init_av_stream(char *base_path, int i, enum AVMediaType t)
     return 0;
 }
 
+void close_fds (void)
+{
+    int i;
+    for (i = 0; i < MAX_STREAMS; i++) {
+       if (av_streams[i].fd != 0) {
+           printf("closing fd %d for stream index %d\n", av_streams[i].fd, i);
+	   close(av_streams[i].fd);
+	   av_streams[i].fd = 0;
+       }
+    }
+}
+
+void signal_handler (int sig)
+{
+    exit_flag = 1;
+}
+
 int main(int argc, char **argv)
 {
     int ret = 0;
@@ -61,6 +81,9 @@ int main(int argc, char **argv)
     int i;
     int stream_index;
     int size;
+    char buf[64];
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     if(argc < 2)
     {
@@ -69,6 +92,7 @@ int main(int argc, char **argv)
     }
     src_filename = argv[1];
     char *base_out_path = argv[2];
+    memset(&av_streams, 0, MAX_STREAMS * sizeof(av_streams));
 
     /* open input file, and allocate format context */
     if (avformat_open_input(&fmt_ctx, src_filename, NULL, NULL) < 0) {
@@ -104,7 +128,7 @@ int main(int argc, char **argv)
         }
     }
 
-    while(av_read_frame(fmt_ctx, &pkt) >= 0) {
+    while(!exit_flag && av_read_frame(fmt_ctx, &pkt) >= 0) {
         stream_index = pkt.stream_index;
         /*if(stream_index == 0)
         {
@@ -119,13 +143,16 @@ int main(int argc, char **argv)
         }
 
 #ifdef AV_FIFO_SINK
-        printf("av_to_es: %d, %ld\n", pkt.size + 8, pkt.pts);
-        size = pkt.size + sizeof(pkt.pts);
-        write(av_streams[stream_index].fd, &size, sizeof(pkt.size));
+        printf("av_to_es: size %d, pts %ld index %d flags %d\n", pkt.size, pkt.pts, pkt.stream_index, pkt.flags);
+        size = pkt.size + sizeof(pkt.pts) + sizeof(pkt.flags);
+        write(av_streams[stream_index].fd, &pkt.size, sizeof(pkt.size));
         write(av_streams[stream_index].fd, &pkt.pts, sizeof(pkt.pts));
+        write(av_streams[stream_index].fd, &pkt.flags, sizeof(pkt.flags));
 #endif
         write(av_streams[stream_index].fd, pkt.data, pkt.size);
         av_packet_unref(&pkt);
     }
-
+    printf("While loop exited, cleaning up\n");
+    close_fds();
+    avformat_close_input(&fmt_ctx);
 }
