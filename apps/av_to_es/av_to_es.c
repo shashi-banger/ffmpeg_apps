@@ -136,11 +136,13 @@ int main(int argc, char **argv)
             printf("Vid frame %d, %d, %ld\n", c++, pkt.size, pkt.pts);
         }*/
 
+#if 0 /* some problem in libav, pts are negative and >2^33
         /*Handle Invalid PTS */
         if ((pkt.pts < 0) || (pkt.pts > pow(2,33))) {
             av_packet_unref(&pkt);
             continue;
         }
+#endif
 
 #ifdef AV_FIFO_SINK
         printf("av_to_es: size %d, pts %ld index %d flags %d\n", pkt.size, pkt.pts, pkt.stream_index, pkt.flags);
