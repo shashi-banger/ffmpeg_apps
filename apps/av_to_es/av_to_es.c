@@ -136,9 +136,9 @@ int main(int argc, char **argv)
             printf("Vid frame %d, %d, %ld\n", c++, pkt.size, pkt.pts);
         }*/
 
-#if 0 /* some problem in libav, pts are negative and >2^33
+#if 1 /* some problem in libav, pts are negative and >2^33 */
         /*Handle Invalid PTS */
-        if ((pkt.pts < 0) || (pkt.pts > pow(2,33))) {
+        if (pkt.pts < 0) {
             av_packet_unref(&pkt);
             continue;
         }
