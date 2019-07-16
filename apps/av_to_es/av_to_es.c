@@ -157,7 +157,8 @@ int main(int argc, char **argv)
         size = pkt.size + sizeof(pkt.pts) + sizeof(pkt.flags);
         write(av_streams[stream_index].fd, &pkt.size, sizeof(pkt.size));
         write(av_streams[stream_index].fd, &pkt.pts, sizeof(pkt.pts));
-        write(av_streams[stream_index].fd, GetTimeNowNs(), sizeof(int64_t));
+        int64_t  time_now = GetTimeNowNs();
+        write(av_streams[stream_index].fd, &time_now, sizeof(int64_t));
         int flags = pkt.flags & AV_PKT_FLAG_KEY;
         write(av_streams[stream_index].fd, &flags, sizeof(pkt.flags));
 #endif
