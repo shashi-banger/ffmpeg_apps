@@ -130,7 +130,7 @@ int main(int argc, char **argv)
         {
             printf("type:%d, %s\n", fmt_ctx->streams[i]->codec->codec_type,
                    av_get_media_type_string(fmt_ctx->streams[i]->codec->codec_type));
-            init_av_stream(base_out_path, i, fmt_ctx->streams[i]->codec->codec_type);
+            init_av_stream(base_out_path, i+1, fmt_ctx->streams[i]->codec->codec_type);
         }
         else
         {
