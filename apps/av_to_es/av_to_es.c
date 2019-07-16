@@ -74,6 +74,16 @@ void signal_handler (int sig)
     exit_flag = 1;
 }
 
+int64_t GetTimeNowNs()
+{
+    uint64_t now_ns = 0;
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+
+    return (now_ns = ((now.tv_sec * 1000000000) + now.tv_nsec));
+}
+
+
 int main(int argc, char **argv)
 {
     int ret = 0;
@@ -147,7 +157,9 @@ int main(int argc, char **argv)
         size = pkt.size + sizeof(pkt.pts) + sizeof(pkt.flags);
         write(av_streams[stream_index].fd, &pkt.size, sizeof(pkt.size));
         write(av_streams[stream_index].fd, &pkt.pts, sizeof(pkt.pts));
-        write(av_streams[stream_index].fd, &pkt.flags, sizeof(pkt.flags));
+        write(av_streams[stream_index].fd, GetTimeNowNs(), sizeof(int64_t));
+        int flags = pkt.flags & AV_PKT_FLAG_KEY;
+        write(av_streams[stream_index].fd, &flags, sizeof(pkt.flags));
 #endif
         write(av_streams[stream_index].fd, pkt.data, pkt.size);
         av_packet_unref(&pkt);
