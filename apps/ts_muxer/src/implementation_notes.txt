@@ -1,0 +1,3 @@
+
+1. avio_alloc_context in avio.h to initialize the output.
+2. 
