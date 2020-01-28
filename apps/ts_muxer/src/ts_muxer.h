@@ -3,6 +3,20 @@
 #define __TS_MUXER_H__
 
 #include <pthread.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <sys/select.h>
+
+#include <libavutil/avassert.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/opt.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/timestamp.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 #include "ts_muxer_fifo.h"
 
 #define MAX_AUDIO_STREAMS 32
@@ -21,6 +35,7 @@ typedef struct ts_muxer_params_t {
     int  num_aud_tracks;
     int  aud_pid[MAX_AUDIO_STREAMS];
     int  vid_pid;
+    float         frame_rate;
     AvCodecEnum   vid_codec;
     AvCodecEnum   aud_codec[MAX_AUDIO_STREAMS];
     
@@ -31,6 +46,11 @@ typedef struct ts_muxer_stream {
     ts_muxer_fifo  *inp_fifo;
     int            pid_num;
     int64_t        last_pts;
+    int64_t        last_dts;
+    int            min_dts_diff;
+    int64_t        last_monotonic_pts;
+    int64_t        last_applied_dts;
+    enum AVMediaType    type;
 }ts_muxer_stream;
 
 typedef struct ts_muxer {
@@ -46,9 +66,9 @@ typedef struct ts_muxer {
 
 ts_muxer* create_ts_muxer(ts_muxer_params_t *params);
 int write_video_frame(ts_muxer *mux, unsigned char *buf, 
-                      int size, int64_t pts);
+                      int size, int64_t pts, int64_t dts);
 int  write_audio_frame(ts_muxer *mux, unsigned char *buf, int size,
-                       int64_t pts, int aud_index);
+                       int64_t pts, int64_t dts, int aud_index);
 
 int read_muxed_data(ts_muxer *mux, unsigned char *buf, int size);
 int get_video_write_avail_size(ts_muxer *mux);

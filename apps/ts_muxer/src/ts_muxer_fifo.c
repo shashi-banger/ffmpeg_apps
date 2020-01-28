@@ -5,7 +5,7 @@
 //#include "ts_muxer_common.h"
 #include "circular_buf.h"
 
-static const int gsi_header_size = 12;
+static const int gsi_header_size = 20;
 
 ts_muxer_fifo *create_fifo(int size)
 {
@@ -30,6 +30,7 @@ static int read_next_header(ts_muxer_fifo* fifo, es_frame_header  *hdr)
 {
     cb_read(fifo->buf, (unsigned char *)&hdr->size, sizeof(int));
     cb_read(fifo->buf, (unsigned char *)&hdr->pts, sizeof(int64_t));
+    cb_read(fifo->buf, (unsigned char *)&hdr->dts, sizeof(int64_t));
     return 0;
 }
 
@@ -37,6 +38,7 @@ static int write_next_header(ts_muxer_fifo* fifo, es_frame_header  *hdr)
 {
     cb_write(fifo->buf, (unsigned char *)&hdr->size, sizeof(int));
     cb_write(fifo->buf, (unsigned char *)&hdr->pts, sizeof(int64_t));
+    cb_write(fifo->buf, (unsigned char *)&hdr->dts, sizeof(int64_t));
     return 0;
 }
 
@@ -49,6 +51,7 @@ static int peek_next_header(ts_muxer_fifo* fifo, es_frame_header  *hdr)
     {
         memcpy(&hdr->size, buf, sizeof(int));
         memcpy(&hdr->pts, (buf+sizeof(int)), sizeof(int64_t));
+        memcpy(&hdr->dts, (buf+sizeof(int)), sizeof(int64_t));
 
     }
     return ret_val;

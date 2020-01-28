@@ -8,6 +8,7 @@ typedef struct es_frame_header
 {
     int size;
     int64_t pts;
+    int64_t dts;
 } es_frame_header;
 
 typedef struct ts_muxer_fifo

@@ -14,11 +14,12 @@
 typedef struct frame_header {
     int         size;
     int64_t     pts;
+    int64_t     dts;
     int64_t     utc;
     int         flags;
 }frame_header_t;
 
-static const int  frame_header_size_packed = 24;
+static const int  frame_header_size_packed = 32;
 
 int main(int argc, char **argv)
 {
@@ -65,6 +66,7 @@ int main(int argc, char **argv)
     params.num_aud_tracks = aud_codec_index;
     vid_codec_pid = 2064;
     aud_codec_pid_start = 2068;
+    params.frame_rate = 29.97;
 
     for(i = 0; i < params.num_aud_tracks; i++)
     {
@@ -121,12 +123,14 @@ static int read_frame_hdr(FILE *es_fd, frame_header_t *hdr)
     num_bytes_read += ret * sizeof(int);
     ret = fread(&hdr->pts, sizeof(int64_t), 1, es_fd);
     num_bytes_read += ret * sizeof(int64_t);
+    ret = fread(&hdr->dts, sizeof(int64_t), 1, es_fd);
+    num_bytes_read += ret * sizeof(int64_t);
     ret = fread(&hdr->utc, sizeof(int64_t), 1, es_fd);
     num_bytes_read += ret * sizeof(int64_t);
     ret = fread(&hdr->flags, sizeof(int), 1,   es_fd);
     num_bytes_read += ret * sizeof(int);
     
-    if (num_bytes_read == (2*sizeof(int) + 2*sizeof(int64_t)))
+    if (num_bytes_read == (2*sizeof(int) + 3*sizeof(int64_t)))
     {
         num_bytes_read = sizeof(frame_header_t);
     }
@@ -166,9 +170,9 @@ int muxer_process(ts_muxer *mux, FILE *video_es_fd, int num_aud,
         }
 
         ret = read_frame_hdr(video_es_fd, &video_frame_hdr);
-        printf("VIDE_HDR: read_size = %d %lu %d  %ld   %ld   %d\n", ret, sizeof(frame_header_t), 
+        printf("VIDE_HDR: read_size = %d %lu %d  %ld  %ld  %ld   %d\n", ret, sizeof(frame_header_t), 
                 video_frame_hdr.size, 
-                video_frame_hdr.pts, video_frame_hdr.utc, video_frame_hdr.flags); 
+                video_frame_hdr.pts, video_frame_hdr.dts, video_frame_hdr.utc, video_frame_hdr.flags); 
         if(ret != sizeof(frame_header_t))
         {
             printf("Exiting Main app loop\n");
@@ -181,7 +185,8 @@ int muxer_process(ts_muxer *mux, FILE *video_es_fd, int num_aud,
                 fread(video_buffer, 1, video_frame_hdr.size, 
                         video_es_fd);
                 write_video_frame(mux, video_buffer, 
-                        video_frame_hdr.size, video_frame_hdr.pts);
+                        video_frame_hdr.size, video_frame_hdr.pts, 
+                        video_frame_hdr.dts);
             }
             else
             {
@@ -198,21 +203,26 @@ int muxer_process(ts_muxer *mux, FILE *video_es_fd, int num_aud,
             while (1)
             {
                 ret = read_frame_hdr(audio_es_fd[i], &audio_frame_hdr);
-                printf("AUDIO_HDR: read_size = %d %lu %d  %ld   %ld   %d\n", ret, sizeof(frame_header_t), 
+                printf("AUDIO_HDR: read_size = %d %lu %d  %ld  %ld  %ld   %d\n", ret, sizeof(frame_header_t), 
                 audio_frame_hdr.size, 
-                audio_frame_hdr.pts, audio_frame_hdr.utc, audio_frame_hdr.flags);
+                audio_frame_hdr.pts, audio_frame_hdr.dts, audio_frame_hdr.utc, audio_frame_hdr.flags);
                 if(ret != sizeof(frame_header_t))
                 {
                     break;
                 }
                 else
                 {
-                    if(audio_frame_hdr.pts <= video_frame_hdr.pts)
+                    if((get_audio_write_avail_size(mux, i) > audio_frame_hdr.size) &&
+                       audio_frame_hdr.pts <= video_frame_hdr.pts)
                     {
+                        static int64_t   __aud_frame_pts = 0;
                         fread(audio_buffer, 1, audio_frame_hdr.size, 
                             audio_es_fd[i]);
+                        printf("Ts_muxer_app audio %f\n", (audio_frame_hdr.pts - __aud_frame_pts)/90.);
+                        __aud_frame_pts = audio_frame_hdr.pts;
                         write_audio_frame(mux, audio_buffer, 
-                            audio_frame_hdr.size, audio_frame_hdr.pts, i);
+                            audio_frame_hdr.size, audio_frame_hdr.pts,
+                            audio_frame_hdr.dts, i);
                     }
                     else
                     {

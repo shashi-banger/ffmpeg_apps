@@ -2,32 +2,18 @@
  * Ts muxer
  */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
-#include <sys/select.h>
 
-#include <libavutil/avassert.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/opt.h>
-#include <libavutil/mathematics.h>
-#include <libavutil/timestamp.h>
-#include <libavformat/avformat.h>
-#include <libswscale/swscale.h>
-#include <libswresample/swresample.h>
 #include "ts_muxer.h"
 
 
-#define STREAM_DURATION   10.0
-#define STREAM_FRAME_RATE 25 /* 25 images/s */
-#define STREAM_PIX_FMT    AV_PIX_FMT_YUV420P /* default pix_fmt */
+
+#define MAX_MIN_DTS_DIFF  (500 * 90)
 
 #define SCALE_FLAGS SWS_BICUBIC
 
 static const int video_fifo_size = 4000000; //1 sec buf @32Mbps
 static const int audio_fifo_size = 384000/8; //1 sec buf at 384kbps
-static const int out_ts_mux_size = 1000000;
+static const int out_ts_mux_size = 40000000;
 #define MAX_INT64 (1L<<63 - 1)
 
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt)
@@ -61,11 +47,14 @@ static int write_frame(ts_muxer_stream *mux_st, AVFormatContext *fmt_ctx,
 
 /* Add an output stream. */
 static void add_stream(ts_muxer *mux, ts_muxer_stream *mux_st,
-                       enum AVCodecID codec_id, int pid_num)
+                       enum AVCodecID codec_id, int pid_num,
+                       float vid_frame_rate)
 {
     int i;
     AVCodec *codec;
+    AVCodecContext  *codec_context;
     AVFormatContext *oc = mux->av_fmt_ctxt;
+    
     int        fifo_size;
 
     printf("add_stream %x %d\n", codec_id, pid_num);
@@ -82,18 +71,33 @@ static void add_stream(ts_muxer *mux, ts_muxer_stream *mux_st,
         fprintf(stderr, "Could not allocate stream\n");
         exit(1);
     }
+
+    codec_context = avcodec_alloc_context3(codec);
+    mux_st->st->codecpar =  avcodec_parameters_alloc();
+    
+    
+
     mux_st->pid_num = pid_num;
     mux_st->st->id = pid_num;
-    mux_st->last_pts = 0;
+    mux_st->last_applied_dts = 0;
+    mux_st->last_monotonic_pts = 0;
+    mux_st->last_pts = -1;
+    mux_st->last_dts = -1;
+    mux_st->type = codec->type;
 
     switch ((codec)->type) {
     case AVMEDIA_TYPE_AUDIO:
         fifo_size = audio_fifo_size;
+        codec_context->sample_rate = 48000;
         break;
     case AVMEDIA_TYPE_VIDEO:
+        codec_context->width = 1920;
+        codec_context->height = 1080;
         fifo_size = video_fifo_size;
+        mux_st->min_dts_diff = (int)(90000/vid_frame_rate);
         break;
     }
+    avcodec_parameters_from_context(mux_st->st->codecpar,  codec_context);
     mux_st->inp_fifo = create_fifo(fifo_size);
 
     mux_st->st->time_base = (AVRational){ 1, 90000 };
@@ -118,7 +122,7 @@ static int write_packet_fn(void *opaque, uint8_t *buf, int buf_size)
        till it can be written out */
     while(1)
     {
-        if(write_avail_fifo(mux->out_fifo) > buf_size)
+        if(write_avail_fifo(mux->out_fifo) >= buf_size)
         {
             bytes_written= write_fifo(mux->out_fifo, buf, buf_size);
             break;
@@ -148,7 +152,7 @@ static int init_avio_context(AVIOContext **pb, int buffer_size,
                   write_packet_fn,     NULL);
 } 
 
-static int init_next_av_packet(AVPacket *pkt, ts_muxer_fifo *fifo, int64_t max_pts)
+static int init_next_av_packet(ts_muxer_stream *mux_st, AVPacket *pkt, ts_muxer_fifo *fifo, int64_t max_pts)
 {
     int ret_val = 0;
 
@@ -160,12 +164,43 @@ static int init_next_av_packet(AVPacket *pkt, ts_muxer_fifo *fifo, int64_t max_p
         {
             /* Next frame exists in fifo */
             unsigned char *data = av_malloc(hdr.size);
+            int64_t  new_dts;
+
             printf("init_next_av_packet %d %d\n", hdr.size, fifo->buf->data_rd);
             read_fifo_with_hdr(fifo, data, hdr.size, &hdr);
             pkt->pts = hdr.pts;
+            if(mux_st->type != AVMEDIA_TYPE_VIDEO)
+            {
+                new_dts  = pkt->pts;
+            }
+            else if (mux_st->type ==  AVMEDIA_TYPE_VIDEO)
+            {
+                if((hdr.dts != -1) && (hdr.dts - mux_st->last_dts) > 0 &&
+                    (hdr.dts - mux_st->last_dts) < mux_st->min_dts_diff)
+                {
+                    mux_st->min_dts_diff = hdr.dts - mux_st->last_dts;
+                }
+
+                if(hdr.dts != -1)
+                {
+                    new_dts = hdr.dts;
+                }
+                else if(mux_st->last_dts == -1)
+                {
+                    new_dts = pkt->pts - 120*90;
+                }
+                else 
+                {
+                    new_dts = mux_st->last_dts + mux_st->min_dts_diff;
+                }
+            }
+            pkt->dts = new_dts;
+            
+            mux_st->last_pts = pkt->pts;
+            mux_st->last_dts = new_dts;
             av_packet_from_data(pkt, data, hdr.size);
             
-            printf("Pts = %ld %ld\n", pkt->pts/90, max_pts/90);
+            printf("Pts = %ld, Dts = %ld %ld\n", pkt->pts/90, pkt->dts/90, max_pts/90);
         } 
         else
         {
@@ -181,23 +216,25 @@ static int init_next_av_packet(AVPacket *pkt, ts_muxer_fifo *fifo, int64_t max_p
 }
 
 int write_video_frame(ts_muxer *mux, unsigned char *buf, 
-                      int size, int64_t pts)
+                      int size, int64_t pts, int64_t dts)
 {
     es_frame_header  hdr;
 
     hdr.size = size;
     hdr.pts  = pts;
+    hdr.dts = dts;
     write_fifo_with_hdr(mux->st_video.inp_fifo, buf, size, &hdr);
     return 0;
 }
 
 int  write_audio_frame(ts_muxer *mux, unsigned char *buf, int size,
-                       int64_t pts, int aud_index)
+                       int64_t pts, int64_t dts, int aud_index)
 {
     es_frame_header  hdr;
 
     hdr.size = size;
     hdr.pts  = pts;
+    hdr.dts = dts;
     write_fifo_with_hdr(mux->st_audio[aud_index].inp_fifo, 
                         buf, size, &hdr);
     return 0;
@@ -218,24 +255,41 @@ void* ts_muxer_entry(void *arg)
     AVPacket   pkt = {0};
     int        ret_val;
     int64_t    last_vid_pts;
+    int        num_vid_frames = 0;
     
 
     while(1) {
         printf("Before video init_next_av_packet\n");
-        ret_val = init_next_av_packet(&pkt, mux->st_video.inp_fifo, MAX_INT64);
+        if(mux->st_audio[0].last_pts == -1)
+        {
+            ret_val = init_next_av_packet(&mux->st_video, &pkt, mux->st_video.inp_fifo, MAX_INT64);
+        }
+        else
+        {
+            ret_val = init_next_av_packet(&mux->st_video, &pkt, mux->st_video.inp_fifo, mux->st_audio[0].last_pts + 5000*90);
+        }
+        
+        
         printf("After video init_next_av_packet\n");
         if(ret_val == 0)
         {
-            printf("=========New video packet read\n");
+            num_vid_frames++;
+            printf("=========New video packet read %d\n", num_vid_frames);
             last_vid_pts = pkt.pts;
-            write_frame(&mux->st_video, mux->av_fmt_ctxt, &mux->time_base,
+            ret_val = write_frame(&mux->st_video, mux->av_fmt_ctxt, &mux->time_base,
                     mux->st_video.st, &pkt);
+            if(ret_val < 0)
+            {
+                printf("Write_frame failed %d\n", ret_val);
+                exit(1);
+            }
+            
         }
         else
         {
             printf("No video packet to read\n");
             usleep(40000);
-            continue;
+            //continue;
         }
         
         for(aud_index = 0; aud_index < mux->num_aud_streams; 
@@ -244,14 +298,26 @@ void* ts_muxer_entry(void *arg)
             while(1)
             {
                 printf("Before audio init_next_av_packet\n");
-                ret_val = init_next_av_packet(&pkt, 
+                ret_val = init_next_av_packet(&mux->st_audio[aud_index], &pkt, 
                             mux->st_audio[aud_index].inp_fifo, last_vid_pts);
                 printf("After audio init_next_av_packet %d\n", ret_val);
                 if(ret_val == 0)
                 {
+                    static int64_t  __prev_pts = 0;
                     printf("=========New audio packet read %d\n", pkt.size);
+                    printf("Called write_frame AUdio %f %d %d %d %d\n", (pkt.pts - __prev_pts)/90., pkt.size, 
+                                mux->st_audio[aud_index].inp_fifo->buf->data_rd,
+                                mux->st_audio[aud_index].inp_fifo->buf->data_wr,
+                                mux->st_audio[aud_index].inp_fifo->buf->data_max_size);
+                    __prev_pts = pkt.pts;
                     write_frame(&mux->st_audio[aud_index], mux->av_fmt_ctxt, &mux->time_base,
                             mux->st_audio[aud_index].st, &pkt);
+                    
+                    if(ret_val < 0)
+                    {
+                        printf("Write_frame failed %d\n", ret_val);
+                        exit(1);
+                    }
                     printf("*******************************\n");
                 }
                 else
@@ -299,25 +365,30 @@ ts_muxer* create_ts_muxer(ts_muxer_params_t *params)
     int vid_codec_id;
     int aud_codec_id;
     int ret;
+    AVDictionary *opt = NULL;
 
+    av_dict_set(&opt, "muxrate", "25000000", 0);
+    av_dict_set(&opt, "pat_period", "0.1", 0);
+    av_dict_set(&opt, "mpegts_copyts", "1", 0);
     /* allocate the output media context */
     avformat_alloc_output_context2(&mux->av_fmt_ctxt, 
                                    NULL, "mpegts", 
                                    NULL);
+    mux->av_fmt_ctxt->max_delay = 1000000;
 
     vid_codec_id = get_av_codec_id(params->vid_codec);
-    add_stream(mux, &mux->st_video, vid_codec_id, params->vid_pid);
+    add_stream(mux, &mux->st_video, vid_codec_id, params->vid_pid, params->frame_rate);
 
     for(i = 0; i < params->num_aud_tracks; i++)
     {
         aud_codec_id = get_av_codec_id(params->aud_codec[i]);
-        add_stream(mux, &mux->st_audio[i], aud_codec_id, params->aud_pid[i]);
+        add_stream(mux, &mux->st_audio[i], aud_codec_id, params->aud_pid[i], 0);
     }
 
     init_avio_context(&mux->av_fmt_ctxt->pb, out_ts_mux_size, 
                             mux);
 
-    ret = avformat_write_header(mux->av_fmt_ctxt, NULL);
+    ret = avformat_write_header(mux->av_fmt_ctxt, &opt);
     if (ret < 0) {
         fprintf(stderr, "Error occurred when opening output file: %s\n",
                 av_err2str(ret));
