@@ -1,5 +1,7 @@
 
-BUILD
+BUILD commands
+
+```
 git clone https://github.com/shashi-banger/ffmpeg_apps.git
 
 cd ffmpeg_apps
@@ -16,3 +18,4 @@ make install prefix=/ DESTDIR=ffmpeg_bin
 cd apps
 mkdir build
 cmake ../
+```
