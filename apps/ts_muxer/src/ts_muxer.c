@@ -13,6 +13,7 @@
 
 static const int video_fifo_size = 4000000; //1 sec buf @32Mbps
 static const int audio_fifo_size = 384000/8; //1 sec buf at 384kbps
+static const int scte_fifo_size = 2048;
 static const int out_ts_mux_size = 40000000;
 #define MAX_INT64 (1L<<63 - 1)
 
@@ -60,7 +61,7 @@ static void add_stream(ts_muxer *mux, ts_muxer_stream *mux_st,
     printf("add_stream %x %d\n", codec_id, pid_num);
     /* find the encoder */
     codec = avcodec_find_encoder(codec_id);
-    if (!(codec)) {
+    if (codec_id != AV_CODEC_ID_SCTE_35 && !(codec)) {
         fprintf(stderr, "Could not find encoder for '%s'\n",
                 avcodec_get_name(codec_id));
         exit(1);
@@ -72,32 +73,49 @@ static void add_stream(ts_muxer *mux, ts_muxer_stream *mux_st,
         exit(1);
     }
 
-    codec_context = avcodec_alloc_context3(codec);
+    if(codec != NULL)
+    {
+        codec_context = avcodec_alloc_context3(codec);
+    }
+    
     mux_st->st->codecpar =  avcodec_parameters_alloc();
     
-    
-
     mux_st->pid_num = pid_num;
     mux_st->st->id = pid_num;
     mux_st->last_applied_dts = 0;
     mux_st->last_monotonic_pts = 0;
     mux_st->last_pts = -1;
     mux_st->last_dts = -1;
-    mux_st->type = codec->type;
 
-    switch ((codec)->type) {
-    case AVMEDIA_TYPE_AUDIO:
-        fifo_size = audio_fifo_size;
-        codec_context->sample_rate = 48000;
-        break;
-    case AVMEDIA_TYPE_VIDEO:
-        codec_context->width = 1920;
-        codec_context->height = 1080;
-        fifo_size = video_fifo_size;
-        mux_st->min_dts_diff = (int)(90000/vid_frame_rate);
-        break;
+    if(codec != NULL)
+    {
+        mux_st->type = codec->type;
+        switch ((codec)->type) {
+        case AVMEDIA_TYPE_AUDIO:
+            fifo_size = audio_fifo_size;
+            codec_context->sample_rate = 48000;
+            break;
+        case AVMEDIA_TYPE_VIDEO:
+            codec_context->width = 1920;
+            codec_context->height = 1080;
+            fifo_size = video_fifo_size;
+            mux_st->min_dts_diff = (int)(90000/vid_frame_rate);
+            break;
+        }
+
     }
-    avcodec_parameters_from_context(mux_st->st->codecpar,  codec_context);
+    
+    if(codec_id == AV_CODEC_ID_SCTE_35)
+    {
+        mux_st->st->codecpar->codec_id = AV_CODEC_ID_SCTE_35;
+        mux_st->type = AVMEDIA_TYPE_DATA;
+        fifo_size = scte_fifo_size;
+    }
+    else
+    {
+        avcodec_parameters_from_context(mux_st->st->codecpar,  codec_context);        
+    }    
+    
     mux_st->inp_fifo = create_fifo(fifo_size);
 
     mux_st->st->time_base = (AVRational){ 1, 90000 };
@@ -152,14 +170,40 @@ static int init_avio_context(AVIOContext **pb, int buffer_size,
                   write_packet_fn,     NULL);
 } 
 
-static int init_next_av_packet(ts_muxer_stream *mux_st, AVPacket *pkt, ts_muxer_fifo *fifo, int64_t max_pts)
+
+static int64_t unroll_timestamp(ts_muxer *mux, int64_t t)
+{
+    int64_t dt;
+
+    if (t == AV_NOPTS_VALUE)
+        return t;
+
+    if (mux->base_ts == -1)
+        mux->base_ts = t;
+
+    dt = (t - mux->base_ts) & 0x01ffffffffll;
+    if (dt & 0x0100000000ll) {
+        dt |= 0xffffffff00000000ll;
+    }
+
+    //printf("mux_base_ts = %ld %ld\n", mux->base_ts, t);
+
+    mux->base_ts += dt;
+
+    return mux->base_ts;
+}
+
+static int init_next_av_packet(ts_muxer *mux, ts_muxer_stream *mux_st, AVPacket *pkt, 
+                               ts_muxer_fifo *fifo, int64_t max_pts)
+                               
 {
     int ret_val = 0;
 
     es_frame_header   hdr = {0};
     if(peek_next_hdr(fifo, &hdr) == 0)
     {
-        printf("################ %d %ld, %ld\n", read_avail_fifo(fifo), hdr.pts, max_pts);
+        printf("init_next_av_packet_entry %d %d %ld, %ld\n", mux_st->type, 
+                        read_avail_fifo(fifo), hdr.pts, max_pts);
         if (hdr.pts <= max_pts)
         {
             /* Next frame exists in fifo */
@@ -168,10 +212,10 @@ static int init_next_av_packet(ts_muxer_stream *mux_st, AVPacket *pkt, ts_muxer_
 
             printf("init_next_av_packet %d %d\n", hdr.size, fifo->buf->data_rd);
             read_fifo_with_hdr(fifo, data, hdr.size, &hdr);
-            pkt->pts = hdr.pts;
+            
             if(mux_st->type != AVMEDIA_TYPE_VIDEO)
             {
-                new_dts  = pkt->pts;
+                new_dts  = hdr.pts;
             }
             else if (mux_st->type ==  AVMEDIA_TYPE_VIDEO)
             {
@@ -187,20 +231,27 @@ static int init_next_av_packet(ts_muxer_stream *mux_st, AVPacket *pkt, ts_muxer_
                 }
                 else if(mux_st->last_dts == -1)
                 {
-                    new_dts = pkt->pts - 120*90;
+                    new_dts = hdr.pts - 120*90;
                 }
                 else 
                 {
                     new_dts = mux_st->last_dts + mux_st->min_dts_diff;
                 }
             }
-            pkt->dts = new_dts;
+
+            //pkt->pts = hdr.pts;
+            //pkt->dts = new_dts;
+            pkt->pts = unroll_timestamp(mux, hdr.pts);
+            pkt->dts = unroll_timestamp(mux, new_dts);
             
-            mux_st->last_pts = pkt->pts;
-            mux_st->last_dts = new_dts;
+            mux_st->last_pts = pkt->pts;            
+            mux_st->last_dts = pkt->dts;
+            
+            
             av_packet_from_data(pkt, data, hdr.size);
             
-            printf("Pts = %ld, Dts = %ld %ld\n", pkt->pts/90, pkt->dts/90, max_pts/90);
+            printf("Pts = %ld, Dts = %ld %ld\n", pkt->pts, hdr.dts, max_pts);
+            //exit(1);
         } 
         else
         {
@@ -240,6 +291,20 @@ int  write_audio_frame(ts_muxer *mux, unsigned char *buf, int size,
     return 0;
 }
 
+int write_scte35_frame(ts_muxer *mux, unsigned char *buf, int size,
+                       int64_t  pts, int64_t dts, int scte_index)
+{
+    es_frame_header  hdr;
+
+    hdr.size = size;
+    hdr.pts  = pts;
+    hdr.dts = dts;
+    write_fifo_with_hdr(mux->st_scte[scte_index].inp_fifo, 
+                        buf, size, &hdr);
+    return 0;
+
+}
+
 int read_muxed_data(ts_muxer *mux, unsigned char *buf, int size)
 {
     int ret_val;
@@ -252,6 +317,7 @@ void* ts_muxer_entry(void *arg)
     ts_muxer *mux = (ts_muxer *)arg;
     es_frame_header    hdr;
     int        aud_index;
+    int        scte_index;
     AVPacket   pkt = {0};
     int        ret_val;
     int64_t    last_vid_pts;
@@ -262,11 +328,11 @@ void* ts_muxer_entry(void *arg)
         printf("Before video init_next_av_packet\n");
         if(mux->st_audio[0].last_pts == -1)
         {
-            ret_val = init_next_av_packet(&mux->st_video, &pkt, mux->st_video.inp_fifo, MAX_INT64);
+            ret_val = init_next_av_packet(mux, &mux->st_video, &pkt, mux->st_video.inp_fifo, MAX_INT64);
         }
         else
         {
-            ret_val = init_next_av_packet(&mux->st_video, &pkt, mux->st_video.inp_fifo, mux->st_audio[0].last_pts + 5000*90);
+            ret_val = init_next_av_packet(mux, &mux->st_video, &pkt, mux->st_video.inp_fifo, mux->st_audio[0].last_pts + 5000*90);
         }
         
         
@@ -278,11 +344,11 @@ void* ts_muxer_entry(void *arg)
             last_vid_pts = pkt.pts;
             ret_val = write_frame(&mux->st_video, mux->av_fmt_ctxt, &mux->time_base,
                     mux->st_video.st, &pkt);
-            if(ret_val < 0)
+            /*if(ret_val < 0)
             {
                 printf("Write_frame failed %d\n", ret_val);
                 exit(1);
-            }
+            }*/
             
         }
         else
@@ -298,7 +364,7 @@ void* ts_muxer_entry(void *arg)
             while(1)
             {
                 printf("Before audio init_next_av_packet\n");
-                ret_val = init_next_av_packet(&mux->st_audio[aud_index], &pkt, 
+                ret_val = init_next_av_packet(mux, &mux->st_audio[aud_index], &pkt, 
                             mux->st_audio[aud_index].inp_fifo, last_vid_pts);
                 printf("After audio init_next_av_packet %d\n", ret_val);
                 if(ret_val == 0)
@@ -323,6 +389,39 @@ void* ts_muxer_entry(void *arg)
                 else
                 {
                     printf("+++++++ %ld\n", last_vid_pts);
+                    break;
+                }
+                
+            }
+            
+        }
+
+        for(scte_index = 0; scte_index < mux->num_scte_streams; 
+                                   scte_index++)
+        {
+            while(1)
+            {
+                ret_val = init_next_av_packet(mux, &mux->st_scte[scte_index], &pkt, 
+                            mux->st_scte[scte_index].inp_fifo, last_vid_pts);
+                if(ret_val == 0)
+                {
+                    static int64_t  __prev_pts = 0;
+                    printf("=========New SCTE packet read %d %ld %ld\n", 
+                           pkt.size, pkt.pts, pkt.dts);
+                    write_frame(&mux->st_scte[scte_index], mux->av_fmt_ctxt, 
+                            &mux->time_base,
+                            mux->st_scte[scte_index].st, &pkt);
+                    
+                    if(ret_val < 0)
+                    {
+                        printf("Write_frame failed %d\n", ret_val);
+                        exit(1);
+                    }
+                    printf("*******************************\n");
+                }
+                else
+                {
+                    printf("SCTE +++++++ %ld\n", last_vid_pts);
                     break;
                 }
                 
@@ -374,7 +473,8 @@ ts_muxer* create_ts_muxer(ts_muxer_params_t *params)
     avformat_alloc_output_context2(&mux->av_fmt_ctxt, 
                                    NULL, "mpegts", 
                                    NULL);
-    mux->av_fmt_ctxt->max_delay = 1000000;
+    mux->av_fmt_ctxt->max_delay = 100000;
+    mux->base_ts = -1;
 
     vid_codec_id = get_av_codec_id(params->vid_codec);
     add_stream(mux, &mux->st_video, vid_codec_id, params->vid_pid, params->frame_rate);
@@ -383,6 +483,11 @@ ts_muxer* create_ts_muxer(ts_muxer_params_t *params)
     {
         aud_codec_id = get_av_codec_id(params->aud_codec[i]);
         add_stream(mux, &mux->st_audio[i], aud_codec_id, params->aud_pid[i], 0);
+    }
+
+    for(i = 0; i < params->num_scte_tracks; i++)
+    {
+        add_stream(mux, &mux->st_scte[i], AV_CODEC_ID_SCTE_35, params->scte_pid[i], 0);
     }
 
     init_avio_context(&mux->av_fmt_ctxt->pb, out_ts_mux_size, 
@@ -395,7 +500,8 @@ ts_muxer* create_ts_muxer(ts_muxer_params_t *params)
         return NULL;
     }
 
-    mux->num_aud_streams = params->num_aud_tracks;
+    mux->num_aud_streams  = params->num_aud_tracks;
+    mux->num_scte_streams = params->num_scte_tracks;
     mux->time_base = (AVRational){ 1, 90000 };
 
     mux->out_fifo = create_fifo(out_ts_mux_size);
@@ -416,6 +522,13 @@ int get_audio_write_avail_size(ts_muxer *mux, int aud_index)
 {
     int  avail_size = 0;
     avail_size = write_avail_fifo(mux->st_audio[aud_index].inp_fifo);
+    return avail_size;
+}
+
+int get_scte_write_avail_size(ts_muxer *mux, int scte_index)
+{
+    int  avail_size = 0;
+    avail_size = write_avail_fifo(mux->st_scte[scte_index].inp_fifo);
     return avail_size;
 }
 

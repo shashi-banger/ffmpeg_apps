@@ -6,7 +6,7 @@ project(ts_muxer)
 include_directories(BEFORE
                    ${PROJECT_SOURCE_DIR}/../../libavformat/
                    ${PROJECT_SOURCE_DIR}/../../ffmpeg_bin/include
-                   ${PROJECT_SOURCE_DIR}/src
+                   ${PROJECT_SOURCE_DIR}/ts_muxer/src
                    )
 
 link_directories(${PROJECT_SOURCE_DIR}/../../ffmpeg_bin/lib /usr/local/lib)

@@ -7,10 +7,13 @@
 #include <libavformat/avformat.h>
 #include <signal.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 
 #define MAX_STREAMS 16
 #define AV_FIFO_SINK
+
+static bool av_fifo_sink = true;
 
 static AVFormatContext *fmt_ctx = NULL;
 static AVPacket pkt;
@@ -40,15 +43,18 @@ int init_av_stream(char *base_path, int i, enum AVMediaType t)
     char   full_path[128];
     av_streams[i].type = t;
     sprintf(full_path, "%s/stream_%s_%02d.es", base_path, av_get_media_type_string(t), i);
-#ifndef AV_FIFO_SINK
-    av_streams[i].fd = open(full_path, O_CREAT|O_WRONLY|O_TRUNC, S_IRWXU | S_IRWXG);
-#else
-    if(mkfifo(full_path, S_IRWXU | S_IRWXG ) == -1 && errno != EEXIST)
-    {
-        errExit("ERROR: mkfifo %s", full_path);
+    if(!av_fifo_sink) {
+        av_streams[i].fd = open(full_path, O_CREAT|O_WRONLY|O_TRUNC, S_IRWXU | S_IRWXG);
     }
-    av_streams[i].fd = open(full_path, O_WRONLY);
-#endif //AV_FIFO_SINK
+    else
+    {
+        if(mkfifo(full_path, S_IRWXU | S_IRWXG ) == -1 && errno != EEXIST)
+        {
+            errExit("ERROR: mkfifo %s", full_path);
+        }
+        av_streams[i].fd = open(full_path, O_WRONLY);
+    }
+    
     if(av_streams[i].fd == -1)
     {
         errExit("Could not open %s", full_path);
@@ -92,16 +98,31 @@ int main(int argc, char **argv)
     int stream_index;
     int size;
     char buf[64];
+    int64_t  dts_value;
+    
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
     if(argc < 2)
     {
-        fprintf(stderr, "Usage: %s <inp_av> <out_path>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <inp_av> <out_path> [out_file]\n",
+                     argv[0]);
+        fprintf(stderr, "Optional out_file to be used to dump output into files");
         exit(1);
     }
     src_filename = argv[1];
     char *base_out_path = argv[2];
+
+    if(strcmp("out_file", argv[3]) == 0)
+    {
+        av_fifo_sink = false;
+    }
+    else
+    {
+        fprintf(stderr, "Unknown option %s", argv[3]);
+        exit(1);
+    }
+    
     memset(&av_streams, 0, MAX_STREAMS * sizeof(av_streams));
 
     /* open input file, and allocate format context */
@@ -130,7 +151,7 @@ int main(int argc, char **argv)
         {
             printf("type:%d, %s\n", fmt_ctx->streams[i]->codec->codec_type,
                    av_get_media_type_string(fmt_ctx->streams[i]->codec->codec_type));
-            init_av_stream(base_out_path, i+1, fmt_ctx->streams[i]->codec->codec_type);
+            init_av_stream(base_out_path, i, fmt_ctx->streams[i]->codec->codec_type);
         }
         else
         {
@@ -140,28 +161,39 @@ int main(int argc, char **argv)
 
     while(!exit_flag && av_read_frame(fmt_ctx, &pkt) >= 0) {
         stream_index = pkt.stream_index;
+        printf("++++++Strm_index=%d", stream_index);
         /*if(stream_index == 0)
         {
             static int c = 0;
             printf("Vid frame %d, %d, %ld\n", c++, pkt.size, pkt.pts);
         }*/
 
+        pkt.pts &= 0x1ffffffff;
+        pkt.dts &= 0x1ffffffff;
         /*Handle Invalid PTS */
-        if ((pkt.pts < 0) || (pkt.pts > pow(2,33))) {
+        /*if ((pkt.pts < 0) || (pkt.pts > pow(2,33))) {
             av_packet_unref(&pkt);
             continue;
-        }
+        }*/
 
-#ifdef AV_FIFO_SINK
-        printf("av_to_es: size %d, pts %ld index %d flags %d\n", pkt.size, pkt.pts, pkt.stream_index, pkt.flags);
+        printf("av_to_es: size=%d, pts=%ld, dts=%ld, index=%d, flags=%d\n", pkt.size, pkt.pts, pkt.dts, pkt.stream_index, pkt.flags);
         size = pkt.size + sizeof(pkt.pts) + sizeof(pkt.flags);
         write(av_streams[stream_index].fd, &pkt.size, sizeof(pkt.size));
         write(av_streams[stream_index].fd, &pkt.pts, sizeof(pkt.pts));
+        if(pkt.dts == AV_NOPTS_VALUE)
+        {
+            dts_value = -1;
+        }
+        else
+        {
+            dts_value = pkt.pts;
+        }
+        
+        write(av_streams[stream_index].fd, &dts_value, sizeof(dts_value));
         int64_t  time_now = GetTimeNowNs();
         write(av_streams[stream_index].fd, &time_now, sizeof(int64_t));
         int flags = pkt.flags & AV_PKT_FLAG_KEY;
         write(av_streams[stream_index].fd, &flags, sizeof(pkt.flags));
-#endif
         write(av_streams[stream_index].fd, pkt.data, pkt.size);
         av_packet_unref(&pkt);
     }

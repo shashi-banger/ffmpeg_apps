@@ -9,6 +9,7 @@
 
 #define MAX_VIDEO_FRAME_SIZE  1000000 //1MB
 #define MAX_AUDIO_FRAME_SIZE  64000 //1MB
+#define MAX_SCTE_FRAME_SIZE  1024 //1MB
 
 
 typedef struct frame_header {
@@ -27,15 +28,18 @@ int main(int argc, char **argv)
     char  *vid_es_file;
     char  *aud_codec_types[MAX_AUDIO_STREAMS];
     char  *aud_es_file[MAX_AUDIO_STREAMS];
+    char  *scte_es_file[MAX_SCTE_STREAMS];
     char  *out_ts_file;
-    int i, aud_codec_index;
+    int i, aud_codec_index, scte_codec_index;
     FILE *video_es_fd;
     FILE *audio_es_fd[MAX_AUDIO_STREAMS];
+    FILE *scte_es_fd[MAX_SCTE_STREAMS];
     FILE *mux_out_fd;
     ts_muxer_params_t   params;
     ts_muxer*  mux;
     int vid_codec_pid;
     int aud_codec_pid_start;
+    int scte_codec_pid_start;
 
     if(argc < 3)
     {
@@ -48,24 +52,46 @@ int main(int argc, char **argv)
     vid_es_file = argv[3];
 
     aud_codec_index = 0;
+    scte_codec_index = 0;
     for(i = 4; i < argc; i+=2)
     {
-        aud_codec_types[aud_codec_index] = argv[i];
-        if ((i+1) < argc)
+        if(strcmp(argv[i], "mp2") == 0 ||
+           strcmp(argv[i], "aac") == 0 ||
+           strcmp(argv[i], "ac3") == 0)
         {
-            aud_es_file[aud_codec_index] = argv[i+1];
+            aud_codec_types[aud_codec_index] = argv[i];
+            if ((i+1) < argc)
+            {
+                aud_es_file[aud_codec_index] = argv[i+1];
+            }
+            else
+            {
+                printf("Audio Es name not present for audio %d\n", i);
+                exit(1);
+            }
+            aud_codec_index += 1;
         }
-        else
+        else if(strcmp(argv[i], "scte") == 0)
         {
-            printf("Audio Es name not present for audio %d\n", i);
-            exit(1);
+            if ((i+1) < argc)
+            {
+                scte_es_file[scte_codec_index] = argv[i+1];
+            }
+            else
+            {
+                printf("Scte Es name not present for scte %d\n", i);
+                exit(1);
+            }
+            scte_codec_index += 1;
         }
-        aud_codec_index += 1;
+        
     }
 
     params.num_aud_tracks = aud_codec_index;
+    params.num_scte_tracks = scte_codec_index;
     vid_codec_pid = 2064;
     aud_codec_pid_start = 2068;
+    scte_codec_pid_start = 500;
     params.frame_rate = 29.97;
 
     for(i = 0; i < params.num_aud_tracks; i++)
@@ -84,6 +110,11 @@ int main(int argc, char **argv)
             printf("Unsupported audio codec type %s\n",                      aud_codec_types[i]);
             exit(1);
         }
+    }
+
+    for(i = 0; i < params.num_scte_tracks; i++)
+    {
+        params.scte_pid[i] = scte_codec_pid_start + i;
     }
 
     if(strcmp(vid_codec_type, "h264") == 0)
@@ -105,9 +136,14 @@ int main(int argc, char **argv)
     {
         audio_es_fd[i] = fopen(aud_es_file[i], "rb");
     }
+    for(i = 0; i < params.num_scte_tracks; i++)
+    {
+        scte_es_fd[i] = fopen(scte_es_file[i], "rb");
+    }
     mux_out_fd = fopen(out_ts_file, "wb");
 
     muxer_process(mux, video_es_fd, params.num_aud_tracks, audio_es_fd,
+                  params.num_scte_tracks,  scte_es_fd,
                   mux_out_fd);
     
 
@@ -141,17 +177,22 @@ static int read_frame_hdr(FILE *es_fd, frame_header_t *hdr)
 
 
 int muxer_process(ts_muxer *mux, FILE *video_es_fd, int num_aud, 
-                  FILE *audio_es_fd[], FILE *mux_out_fd)
+                  FILE *audio_es_fd[], 
+                  int num_scte,
+                  FILE *scte_es_fd[], FILE *mux_out_fd)
 {
     frame_header_t   video_frame_hdr;
     frame_header_t   audio_frame_hdr;
+    frame_header_t   scte_frame_hdr;
     unsigned char  *video_buffer;
     unsigned char  *audio_buffer;
+    unsigned char  *scte_buffer;
     int ret, i;
     unsigned char mux_out_buf[188*7];
 
     video_buffer = (unsigned char*)malloc(MAX_VIDEO_FRAME_SIZE);
     audio_buffer = (unsigned char*)malloc(MAX_AUDIO_FRAME_SIZE);
+    scte_buffer = (unsigned char*)malloc(MAX_SCTE_FRAME_SIZE);
 
     while(1)
     {
@@ -234,6 +275,42 @@ int muxer_process(ts_muxer *mux, FILE *video_es_fd, int num_aud,
                 }
             }            
         }
+
+        for(i = 0; i < num_scte; i++)
+        {
+            while (1)
+            {
+                ret = read_frame_hdr(scte_es_fd[i], &scte_frame_hdr);
+                /*printf("SCTE_HDR: read_size = %d %ld %ld %ld\n", scte_frame_hdr.size,
+                            scte_frame_hdr.pts, scte_frame_hdr.dts, 
+                            video_frame_hdr.pts);*/
+                if(ret != sizeof(frame_header_t))
+                {
+                    break;
+                }
+                else
+                {
+                    if((get_scte_write_avail_size(mux, i) > scte_frame_hdr.size) &&
+                       scte_frame_hdr.pts <= video_frame_hdr.pts)
+                    {
+                        fread(scte_buffer, 1, scte_frame_hdr.size, 
+                            scte_es_fd[i]);
+                        write_scte35_frame(mux, scte_buffer, 
+                            scte_frame_hdr.size, scte_frame_hdr.pts,
+                            scte_frame_hdr.dts, i);
+                        printf("Writing scte %ld %ld\n", scte_frame_hdr.pts, scte_frame_hdr.dts);
+                    }
+                    else
+                    {
+                        fseek(scte_es_fd[i], 
+                            -frame_header_size_packed,  SEEK_CUR);
+                        break;
+                    }
+                    
+                }
+            }            
+        }
+
 
     }
 
