@@ -4,8 +4,8 @@ project(av_to_es)
 
 
 include_directories(BEFORE
-                   /usr/local/amagi/lib/include/libavformat/
-                   /usr/local/amagi/lib/include/
+                   /usr/local/amagi/include/libavformat/
+                   /usr/local/amagi/include/
                    )
 
 link_directories(/usr/local/amagi/lib/ /usr/local/lib)
