@@ -4,11 +4,11 @@ project(transcoder)
 
 
 include_directories(BEFORE
-                   ${PROJECT_SOURCE_DIR}/../../libavformat/
-                   ${PROJECT_SOURCE_DIR}/../../ffmpeg_bin/include
+                    /usr/local/amagi/include/libavformat
+                    /usr/local/amagi/include
                    )
 
-link_directories(${PROJECT_SOURCE_DIR}/../../ffmpeg_bin/lib /usr/local/lib)
+link_directories(/usr/local/amagi/lib /usr/local/lib)
 
 add_executable(transcoder transcoding.c)
 
