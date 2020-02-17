@@ -45,13 +45,13 @@ static int write_next_header(ts_muxer_fifo* fifo, es_frame_header  *hdr)
 static int peek_next_header(ts_muxer_fifo* fifo, es_frame_header  *hdr)
 {
     int  ret_val = 0;
-    unsigned char  buf[12];
+    unsigned char  buf[gsi_header_size];
     ret_val = cb_peek(fifo->buf, (unsigned char *)&buf, 12);
     if(ret_val == 0)
     {
         memcpy(&hdr->size, buf, sizeof(int));
         memcpy(&hdr->pts, (buf+sizeof(int)), sizeof(int64_t));
-        memcpy(&hdr->dts, (buf+sizeof(int)), sizeof(int64_t));
+        memcpy(&hdr->dts, (buf+sizeof(int64_t)), sizeof(int64_t));
 
     }
     return ret_val;
@@ -100,7 +100,11 @@ int write_fifo(ts_muxer_fifo *fifo, unsigned char *buf,
 
 int write_avail_fifo(ts_muxer_fifo *fifo)
 {
-    return cb_writable_size(fifo->buf);
+    int  writable_size;
+    lock_fifo(fifo);
+    writable_size = cb_writable_size(fifo->buf);
+    unlock_fifo(fifo);
+    return writable_size;
 }
 
 int read_fifo_with_hdr(ts_muxer_fifo *fifo,
@@ -156,6 +160,10 @@ int peek_next_hdr(ts_muxer_fifo *fifo , es_frame_header *hdr)
 
 int read_avail_fifo(ts_muxer_fifo *fifo)
 {
-    return cb_readable_size(fifo->buf);
+    int  readable_size;
+    lock_fifo(fifo);
+    readable_size = cb_readable_size(fifo->buf);
+    unlock_fifo(fifo);
+    return readable_size;
 
 }

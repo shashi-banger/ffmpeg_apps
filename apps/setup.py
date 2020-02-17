@@ -19,7 +19,7 @@ ffmpeg_module = Extension('_ffmpeg_lib',
                                        'swscale', 'avutil', 'fdk-aac', 'bz2',
                                        'z', 'lzma', 'm', 'va', 'va-drm',
                                        'va-x11', 'X11', 'dl', 'pthread'],
-                          extra_objexts = ["../ffmpeg_bin/lib/libavformat.so"],
+                          #extra_objexts = ["../ffmpeg_bin/lib/libavformat.so"],
 
 
                           extra_compile_args=["-fPIC"],
@@ -32,9 +32,9 @@ def main():
           version="1.0.0",
           #packages=["ffmpeg_lib"],
           #package_dir={'ffmpeg_lib':'.'},
-          description="Python interface for the fputs C library function",
-          author="<your name>",
-          author_email="your_email@gmail.com",
+          description="Python interface for ffmpeg based ts muxer",
+          author="Shashidhar Banger",
+          author_email="bangu97@gmail.com",
           #py_modules=['ffmpeg_lib'],
           #package_data={'ffmpeg_lib': ['../ffmpeg_bin/lib/*.so']},
           ext_modules=[ffmpeg_module])
