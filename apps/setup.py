@@ -35,7 +35,7 @@ def main():
           description="Python interface for ffmpeg based ts muxer",
           author="Shashidhar Banger",
           author_email="bangu97@gmail.com",
-          #py_modules=['ffmpeg_lib'],
+          py_modules=['ffmpeg_lib'],
           #package_data={'ffmpeg_lib': ['../ffmpeg_bin/lib/*.so']},
           ext_modules=[ffmpeg_module])
 
