@@ -113,14 +113,17 @@ int main(int argc, char **argv)
     src_filename = argv[1];
     char *base_out_path = argv[2];
 
-    if(strcmp("out_file", argv[3]) == 0)
+    if(argc > 3)
     {
-        av_fifo_sink = false;
-    }
-    else
-    {
-        fprintf(stderr, "Unknown option %s", argv[3]);
-        exit(1);
+        if(strcmp("out_file", argv[3]) == 0)
+        {
+            av_fifo_sink = false;
+        }
+        else
+        {
+            fprintf(stderr, "Unknown option %s", argv[3]);
+            exit(1);
+        }
     }
     
     memset(&av_streams, 0, MAX_STREAMS * sizeof(av_streams));
