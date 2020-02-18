@@ -312,6 +312,13 @@ int read_muxed_data(ts_muxer *mux, unsigned char *buf, int size)
     return ret_val;
 }
 
+int get_muxed_output_avail_data(ts_muxer *mux)
+{
+    int ret_val;
+    ret_val = read_avail_fifo(mux->out_fifo);
+    return ret_val;
+}
+
 void* ts_muxer_entry(void *arg)
 {
     ts_muxer *mux = (ts_muxer *)arg;
