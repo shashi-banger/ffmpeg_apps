@@ -58,6 +58,10 @@ def read_frame_hdr(es_fd):
 
 def write_muxed_output(mux, o_buf, mux_out_fd):
     bytes_wr = 0
+    read_bytes = 188*7
+    size_avail = ffmpeg.get_muxed_output_avail_data(mux)
+    if size_avail <= read_bytes:
+        return bytes_wr
     while(1):
         ret = ffmpeg.read_muxed_data(mux, o_buf, 188*7)
         if ret == 0:
