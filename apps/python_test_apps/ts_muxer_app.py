@@ -149,6 +149,7 @@ def main():
 
     params.aud_codec = audio_codec
     params.aud_pid = audio_pids
+    params.mux_rate = 30000000
 
     mux = ffmpeg.create_ts_muxer(params)
 

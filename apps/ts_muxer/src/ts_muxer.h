@@ -42,6 +42,7 @@ typedef struct ts_muxer_params_t {
     float         frame_rate;
     AvCodecEnum   vid_codec;
     int   aud_codec[MAX_AUDIO_STREAMS];
+    int   mux_rate; // In bits per sec
     
 }ts_muxer_params_t;
 

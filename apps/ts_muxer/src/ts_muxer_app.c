@@ -128,6 +128,7 @@ int main(int argc, char **argv)
     }
 
     params.vid_pid = vid_codec_pid;
+    params.mux_rate = 30000000
 
     mux = create_ts_muxer(&params);
 

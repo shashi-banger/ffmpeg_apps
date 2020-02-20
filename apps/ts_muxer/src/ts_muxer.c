@@ -473,7 +473,7 @@ ts_muxer* create_ts_muxer(ts_muxer_params_t *params)
     int ret;
     AVDictionary *opt = NULL;
 
-    av_dict_set(&opt, "muxrate", "25000000", 0);
+    av_dict_set_int(&opt, "muxrate", (int64_t)params->mux_rate, 0);
     av_dict_set(&opt, "pat_period", "0.1", 0);
     av_dict_set(&opt, "mpegts_copyts", "1", 0);
     /* allocate the output media context */
