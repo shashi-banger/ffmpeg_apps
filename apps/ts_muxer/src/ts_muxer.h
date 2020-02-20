@@ -80,7 +80,7 @@ int  write_scte35_frame(ts_muxer *mux, unsigned char *buf, int size,
                        int64_t  pts, int64_t dts, int scte_index);
 
 int read_muxed_data(ts_muxer *mux, unsigned char *buf, int size);
-int get_muxed_output_avail_data(ts_muxer *mux);
+int get_muxed_output_avail_size(ts_muxer *mux);
 int get_video_write_avail_size(ts_muxer *mux);
 int get_audio_write_avail_size(ts_muxer *mux, int aud_index);
 int get_scte_write_avail_size(ts_muxer *mux, int scte_index);
