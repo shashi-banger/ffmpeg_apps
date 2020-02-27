@@ -194,9 +194,9 @@ int main(int argc, char **argv)
                 cli_parse_stream_info (&av_streams[stream_index], argv[arg_index + 1]);
                 stream_index++;
             }
-            else
+            if(strcmp(argv[arg_index], "-p") == 0) 
             {
-                break;
+                printf("ignoring -p option\n");
             }
         }
         num_out_streams = stream_index;
