@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <time.h>
 
 
 #define MAX_STREAMS 16
@@ -20,9 +21,13 @@ static AVPacket pkt;
 static int exit_flag = 0;
 
 void signal_handler(int sig);
-static struct {
+static struct LocAvStream {
     enum AVMediaType   type;
     int           fd;
+    int           id;
+    int           pid;
+    char          media[32]; //audio, h264, data etc
+    char          codec[16];
 } av_streams[MAX_STREAMS];
 
 static void
@@ -36,6 +41,62 @@ errExit(const char *format, ...)
     va_end(argList);
 
     exit(1);
+}
+
+static void cli_parse_stream_info (struct LocAvStream *av_stream, char *stream)
+{
+    if (!av_stream || !stream) {
+        return;
+    }
+
+    char *t = strtok(stream, ":");
+    if (t) {
+       av_stream->id = atoi(t);
+    } else {
+       fprintf(stderr, "Invalid stream name passed, expected <id>:<pid>:<media>:<codec> but passed %s\n", stream);
+       return;
+    }
+    t = strtok(NULL, ":");
+    if (t) {
+       av_stream->pid = atoi(t);
+    } else {
+       fprintf(stderr, "Invalid stream name passed, expected <id>:<pid>:<media>:<codec> but passed %s\n", stream);
+       return;
+    }
+
+    t = strtok(NULL, ":");
+    if (t) {
+       snprintf(av_stream->media, 32, "%s", t);
+    } else {
+       fprintf(stderr, "Invalid stream name passed, expected <id>:<pid>:<media>:<codec> but passed %s\n", stream);
+       return;
+    }
+
+    t = strtok(NULL, ":");
+    if (t) {
+       snprintf(av_stream->codec, 32, "%s", t);
+    } else {
+       fprintf(stderr, "Invalid stream name passed, expected <id>:<pid>:<media>:<codec> but passed %s\n", stream);
+       return;
+    }
+    return;
+}
+
+static int check_id_stream_is_required(int num_av_streams, int stream_pid)
+{
+    int i;
+    int ret_index = -1;
+
+    for(i = 0; i < num_av_streams; i++)
+    {
+        if(stream_pid == av_streams[i].pid)
+        {
+            ret_index = i;
+            break;
+        }
+    }
+    return ret_index;
+
 }
 
 int init_av_stream(char *base_path, int i, enum AVMediaType t)
@@ -99,13 +160,16 @@ int main(int argc, char **argv)
     int size;
     char buf[64];
     int64_t  dts_value;
+    int  arg_index;
+    int num_out_streams;
+    int stream_req;
     
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
     if(argc < 2)
     {
-        fprintf(stderr, "Usage: %s <inp_av> <out_path> [out_file]\n",
+        fprintf(stderr, "Usage: %s <inp_av> <out_path> [out_file] <id>:<pid>:<media>:<codec> ... \n",
                      argv[0]);
         fprintf(stderr, "Optional out_file to be used to dump output into files");
         exit(1);
@@ -113,20 +177,30 @@ int main(int argc, char **argv)
     src_filename = argv[1];
     char *base_out_path = argv[2];
 
+    //memset(&av_streams, 0, MAX_STREAMS * sizeof(av_streams));
     if(argc > 3)
     {
+        arg_index = 3;
+        stream_index = 0;
         if(strcmp("out_file", argv[3]) == 0)
         {
             av_fifo_sink = false;
+            arg_index++;
         }
-        else
+        for(;arg_index < argc; arg_index += 2)
         {
-            fprintf(stderr, "Unknown option %s", argv[3]);
-            exit(1);
+            if(strcmp(argv[arg_index], "-s") == 0)
+            {
+                cli_parse_stream_info (&av_streams[stream_index], argv[arg_index + 1]);
+                stream_index++;
+            }
+            else
+            {
+                break;
+            }
         }
+        num_out_streams = stream_index;
     }
-    
-    memset(&av_streams, 0, MAX_STREAMS * sizeof(av_streams));
 
     /* open input file, and allocate format context */
     if (avformat_open_input(&fmt_ctx, src_filename, NULL, NULL) < 0) {
@@ -154,7 +228,12 @@ int main(int argc, char **argv)
         {
             printf("type:%d, %s\n", fmt_ctx->streams[i]->codec->codec_type,
                    av_get_media_type_string(fmt_ctx->streams[i]->codec->codec_type));
-            init_av_stream(base_out_path, i, fmt_ctx->streams[i]->codec->codec_type);
+            stream_req = check_id_stream_is_required(num_out_streams, fmt_ctx->streams[i]->id);
+            if(stream_req >= 0)
+            {
+                init_av_stream(base_out_path, stream_req, fmt_ctx->streams[i]->codec->codec_type);
+            }
+            
         }
         else
         {
@@ -164,7 +243,16 @@ int main(int argc, char **argv)
 
     while(!exit_flag && av_read_frame(fmt_ctx, &pkt) >= 0) {
         stream_index = pkt.stream_index;
-        printf("++++++Strm_index=%d", stream_index);
+
+        stream_req = check_id_stream_is_required(num_out_streams, fmt_ctx->streams[stream_index]->id);
+        if(stream_req < 0)
+        {
+            //printf("continuing %d\n", stream_index);
+            av_packet_unref(&pkt);
+            continue;
+        }
+
+        //printf("++++++Strm_index=%d", stream_index);
         /*if(stream_index == 0)
         {
             static int c = 0;
