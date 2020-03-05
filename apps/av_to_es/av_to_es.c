@@ -169,7 +169,7 @@ int main(int argc, char **argv)
 
     if(argc < 2)
     {
-        fprintf(stderr, "Usage: %s <inp_av> <out_path> [out_file] <id>:<pid>:<media>:<codec> ... \n",
+        fprintf(stderr, "Usage: %s <inp_av> <out_path> [out_file] -s <id>:<pid>:<media>:<codec> ... \n",
                      argv[0]);
         fprintf(stderr, "Optional out_file to be used to dump output into files");
         exit(1);
@@ -247,7 +247,7 @@ int main(int argc, char **argv)
         stream_req = check_id_stream_is_required(num_out_streams, fmt_ctx->streams[stream_index]->id);
         if(stream_req < 0)
         {
-            //printf("continuing %d\n", stream_index);
+            printf("continuing %d\n", fmt_ctx->streams[stream_index]->id);
             av_packet_unref(&pkt);
             continue;
         }

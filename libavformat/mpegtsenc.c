@@ -77,7 +77,9 @@ typedef struct MpegTSWrite {
     const AVClass *av_class;
     MpegTSSection pat; /* MPEG-2 PAT table */
     MpegTSSection sdt; /* MPEG-2 SDT table context */
+    MpegTSSection scte_sections[16];
     MpegTSService **services;
+    int num_scte_sections;
     int sdt_packet_count;
     int sdt_packet_period;
     int pat_packet_count;
@@ -654,7 +656,15 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
                 putstr8(&q, tag, 0);
                 *q++ = 0;            /* metadata service ID */
                 *q++ = 0xF;          /* metadata_locator_record_flag|MPEG_carriage_flags|reserved */
+            } else if (st->codecpar->codec_id == AV_CODEC_ID_SCTE_35) {
+                *q++ = 0x05; /* MPEG-2 registration descriptor */
+                *q++ = 4;
+                *q++ = 'C';
+                *q++ = 'U';
+                *q++ = 'E';
+                *q++ = 'I';
             }
+            
             break;
         }
 
@@ -776,6 +786,7 @@ static int mpegts_init(AVFormatContext *s)
     const char *provider_name;
     int *pids;
     int ret;
+    int num_scte_sections = 0;
 
     if (s->max_delay < 0) /* Not set by the caller */
         s->max_delay = 0;
@@ -914,6 +925,16 @@ static int mpegts_init(AVFormatContext *s)
             service->pcr_pid = ts_st->pid;
             pcr_st           = st;
         }
+        if(st->codecpar->codec_id == AV_CODEC_ID_SCTE_35) {
+            ts->scte_sections[num_scte_sections].pid          = ts_st->pid;
+            /* Initialize at 15 so that it wraps and is equal to 0 for the
+            * first packet we write. */
+            ts->scte_sections[num_scte_sections].cc           = 15;
+            ts->scte_sections[num_scte_sections].discontinuity= ts->flags & MPEGTS_FLAG_DISCONT;
+            ts->scte_sections[num_scte_sections].write_packet = section_write_packet;
+            ts->scte_sections[num_scte_sections].opaque       = s;
+            num_scte_sections++;
+        }
         if (st->codecpar->codec_id == AV_CODEC_ID_AAC &&
             st->codecpar->extradata_size > 0) {
             AVStream *ast;
@@ -945,6 +966,7 @@ static int mpegts_init(AVFormatContext *s)
             ts_st->opus_pending_trim_start = st->codecpar->initial_padding * 48000 / st->codecpar->sample_rate;
         }
     }
+    ts->num_scte_sections = num_scte_sections;
 
     av_freep(&pids);
 
@@ -1819,7 +1841,33 @@ static int mpegts_write_packet(AVFormatContext *s, AVPacket *pkt)
         mpegts_write_flush(s);
         return 1;
     } else {
-        return mpegts_write_packet_internal(s, pkt);
+        AVStream *st = s->streams[pkt->stream_index];
+        if(st->codecpar->codec_id == AV_CODEC_ID_SCTE_35)
+        {
+            MpegTSWrite *ts = s->priv_data;
+            MpegTSWriteStream *ts_st = st->priv_data;
+            MpegTSSection *s = NULL;
+            int i;
+            for(i = 0; i < ts->num_scte_sections; i++)
+            {
+                if(ts->scte_sections[i].pid == ts_st->pid)
+                {
+                    s = &ts->scte_sections[i];
+                    break;
+                }
+            }
+            if(s != NULL) {
+                mpegts_write_section(s, pkt->data, pkt->size);
+                return 0;
+            }
+            else {
+                /* Placeholder else code. Ignore error. This should never happen by construction */
+                return 0;
+            }
+        }
+        else {
+            return mpegts_write_packet_internal(s, pkt);
+        }
     }
 }
 

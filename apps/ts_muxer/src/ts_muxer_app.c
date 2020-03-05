@@ -128,7 +128,7 @@ int main(int argc, char **argv)
     }
 
     params.vid_pid = vid_codec_pid;
-    params.mux_rate = 30000000;
+    params.mux_rate = 25000000;
 
     mux = create_ts_muxer(&params);
 
@@ -299,7 +299,8 @@ int muxer_process(ts_muxer *mux, FILE *video_es_fd, int num_aud,
                         write_scte35_frame(mux, scte_buffer, 
                             scte_frame_hdr.size, scte_frame_hdr.pts,
                             scte_frame_hdr.dts, i);
-                        printf("Writing scte %ld %ld\n", scte_frame_hdr.pts, scte_frame_hdr.dts);
+                        printf("Writing scte %ld %ld %x %x\n", scte_frame_hdr.pts, scte_frame_hdr.dts, 
+                                            scte_buffer[0], scte_buffer[1]);
                     }
                     else
                     {

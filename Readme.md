@@ -14,8 +14,14 @@ tar --skip-old-files -xvf n4.0.1.tar.gz --strip 1
 
 ./ffmpeg_configure.sh
 make all
-make install prefix=/ DESTDIR=ffmpeg_bin
+sudo make install prefix=/ DESTDIR=/usr/local/amagi/
 cd apps
 mkdir build
 cmake ../
 ```
+
+Usage:
+
+./av_to_es/av_to_es /home2/sb_media/scte_eg/scte_sample.ts /home2/sb_media/scte_eg/ out_file -s 0:2064:video:h264 -s 1:2068:audio:mp2 -s 2:500:data:scte35
+
+/ts_muxer/ts_muxer /tmp/o.ts h264 /home2/sb_media/scte_eg/stream_video_00.es mp2 /home2/sb_media/scte_eg/stream_audio_01.es scte /home2/sb_media/scte_eg/stream_data_02.es
